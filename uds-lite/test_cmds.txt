@@ -1,0 +1,5 @@
+session 03
+read 010c
+dtc
+tp
+quit
