@@ -2,6 +2,10 @@
 
 一本从诊断元问题出发，直通ISO 14229协议规范与AUTOSAR DCM源码、再到亲手实现UDS栈的开源技术书。
 
+## 运行效果
+<img width="1475" height="920" alt="uds_demo" src="https://github.com/user-attachments/assets/5518ae1a-9abf-471c-bf2a-16bdd60f3a26" />
+
+
 ## 这本书讲了什么
 
 全书 48 节，分五章：
