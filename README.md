@@ -2,6 +2,10 @@
 
 一本从诊断元问题出发，直通ISO 14229协议规范与AUTOSAR DCM源码、再到亲手实现UDS栈的开源技术书。
 
+## 在线阅读
+
+[📖 在线浏览本书](https://web-l.github.io/lularible-books/usd-book/index.html)
+
 ## 运行效果
 <img width="1475" height="920" alt="uds_demo" src="https://github.com/user-attachments/assets/5518ae1a-9abf-471c-bf2a-16bdd60f3a26" />
 
@@ -52,6 +56,12 @@ make
 - **[HSM 技术书——从思想实验到安全基石](https://github.com/Lularible/hsm-book)** — 从岩画密码学到硬件安全模块，完整覆盖车载 HSM 的技术链路
 - **[存储 技术书——在不可靠的硬件上构建可靠的数据家园](https://github.com/Lularible/storage-book)** — 一本关于存储技术演进与文件系统实现的深度技术书籍
 - **[功能安全——ISO 26262分析与代码实现](https://github.com/Lularible/safety-book-iso26262)** — 以免疫系统为叙事线索的功能安全技术书。兼顾ISO 26262标准分析、源码拆解与动手实现
+
+## 致谢
+
+- 感谢 [@web-l](https://github.com/web-l) 构建并维护本系列的 [mdBook 在线阅读站](https://web-l.github.io/lularible-books/)，方便了大家阅读。
+
+---
 
 "汽车电子七部曲"是一个持续更新的系列——还有软件工程在打磨中。
 如果觉得本书对你有用，不妨给个 ⭐ 关注进度。
