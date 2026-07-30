@@ -4,7 +4,7 @@
 
 ## 在线阅读
 
-[📖 在线浏览本书](https://web-l.github.io/lularible-books/usd-book/index.html)
+[📖 在线浏览本书](https://web-l.github.io/lularible-books/uds-book/index.html)
 
 ## 运行效果
 <img width="1475" height="920" alt="uds_demo" src="https://github.com/user-attachments/assets/5518ae1a-9abf-471c-bf2a-16bdd60f3a26" />
