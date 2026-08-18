@@ -1,4 +1,4 @@
-/* uds_msg.c — uds-lite 报文序列化实现
+/* uds_msg.c -- uds-lite message serialization implementation
  */
 #include <string.h>
 #include "uds_msg.h"
@@ -22,16 +22,16 @@ void uds_parse_message(const u8 *raw, u16 raw_len, UdsMsg *msg)
     u8 first_byte = raw[0];
 
     if (first_byte == NEGATIVE_RESPONSE_SID) {
-        /* 负响应: {0x7F, 原SID, NRC} */
+        /* Negative response: {0x7F, original SID, NRC} */
         msg->sid = (raw_len >= 2) ? raw[1] : 0;
         msg->sub_function = (raw_len >= 3) ? raw[2] : 0;
-        msg->is_positive = FALSE;  /* 语义上不是正响应 */
+        msg->is_positive = FALSE;  /* semantically not a positive response */
         msg->data_len = 0;
     } else if (first_byte & SID_POSITIVE_RESPONSE_MASK) {
-        /* 正响应: SID|0x40 开头 */
+        /* Positive response: starts with SID|0x40 */
         msg->sid = first_byte & ~SID_POSITIVE_RESPONSE_MASK;
         msg->is_positive = TRUE;
-        /* 后续字节为响应数据 */
+        /* Remaining bytes are response data */
         u16 remaining = raw_len - 1;
         if (remaining > UDS_MAX_MSG_LEN) remaining = UDS_MAX_MSG_LEN;
         if (remaining > 0) {
@@ -41,7 +41,7 @@ void uds_parse_message(const u8 *raw, u16 raw_len, UdsMsg *msg)
             msg->data_len = 0;
         }
     } else {
-        /* 普通请求 (服务端收到诊断仪发来的请求) */
+        /* Ordinary request (server receives a request from the tester) */
         msg->sid = first_byte;
         msg->is_positive = FALSE;
         msg->sub_function = (raw_len >= 2) ? (raw[1] & 0x7F) : 0;

@@ -1,9 +1,10 @@
-/* uds_shell.c — uds-lite 交互式诊断终端
- * 命令行驱动的UDS控制台，支持手工发送任意UDS服务并查看响应。
- * 使用方法: ./uds_shell [ip] [port]
- * 命令: session <01|02|03>  security  read <did>  write <did> <hex...>
- *        dtc [mask]  clear  routine <rid>  download <addr> <size>
- *        tp  help  quit
+/* uds_shell.c -- uds-lite interactive diagnostic terminal
+ * Command-line driven UDS console, supports manually sending any UDS service
+ * and viewing the response.
+ * Usage: ./uds_shell [ip] [port]
+ * Commands: session <01|02|03>  security  read <did>  write <did> <hex...>
+ *           dtc [mask]  clear  routine <rid>  download <addr> <size>
+ *           tp  help  quit
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +20,7 @@
 #include "uds_msg.h"
 
 static int sock_fd = -1;
-/* ── 网络层 ──────────────────────────────── */
+/* -- Network layer ------------------------------------- */
 static int connect_ecu(const char *ip, int port)
 {
     sock_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -50,7 +51,7 @@ static void send_and_recv(const u8 *data_in, u16 len)
     printf("  Rx [%zu]: ", n);
     for (ssize_t i = 0; i < n; i++) printf("%02X ", buf[i]);
 
-    /* 解析响应类型 */
+    /* Parse the response type */
     if (n >= 1 && buf[0] == NEGATIVE_RESPONSE_SID) {
         const char *nrc_str = "Unknown";
         if (n >= 3) {
@@ -68,14 +69,14 @@ static void send_and_recv(const u8 *data_in, u16 len)
                 case NRC_SERVICE_NOT_IN_ACTIVE_SESSION: nrc_str = "ServiceNotSupportedInActiveSession"; break;
             }
         }
-        printf(" ⚠ NEGATIVE: SID=0x%02X NRC=0x%02X (%s)", buf[1], buf[2], nrc_str);
+        printf(" ! NEGATIVE: SID=0x%02X NRC=0x%02X (%s)", buf[1], buf[2], nrc_str);
     } else if (n >= 1 && (buf[0] & SID_POSITIVE_RESPONSE_MASK)) {
-        printf(" ✓ POSITIVE: origSID=0x%02X", buf[0] & ~SID_POSITIVE_RESPONSE_MASK);
+        printf(" + POSITIVE: origSID=0x%02X", buf[0] & ~SID_POSITIVE_RESPONSE_MASK);
     }
     printf("\n");
 }
 
-/* ── 命令解析 ────────────────────────────── */
+/* -- Command parsing ----------------------------------- */
 static u16 parse_hex(const char *s, u8 *out, u16 max_len)
 {
     u16 len = 0;
@@ -203,7 +204,7 @@ static void cmd_xfer_data(const char *arg)
     u8 buf[UDS_MAX_MSG_LEN];
     buf[0] = SID_TRANSFER_DATA;
     buf[1] = (u8)seq;
-    u16 blk = 20; /* 教学: 固定20字节 */
+    u16 blk = 20; /* teaching: fixed 20 bytes */
     memset(&buf[2], 0xAA, blk);
     printf("  --- TransferData (seq=%u, len=%u) ---\n", seq, blk);
     send_and_recv(buf, 2 + blk);
@@ -245,28 +246,28 @@ static void print_help(void)
 {
     printf(
 "\n  UDS Shell Commands:\n"
-"  ─────────────────────────────────────────────────────────────\n"
-"  session <01|02|03>   切换诊断会话 (01=默认 02=编程 03=扩展)\n"
-"  security              请求安全种子 (再发 sendkey <4 hex>)\n"
-"  sendkey <hex4>        发送安全密钥 (4字节hex)\n"
-"  read <did>            读取DID (如 read f190)\n"
-"  write <did> <hex>     写入DID (如 write ff01 aabb)\n"
-"  dtc [mask]            读取DTC (可选状态掩码, 默认0x08)\n"
-"  clear                 清除全部DTC\n"
-"  routine <rid>         启动例行程序 (如 routine 0201)\n"
-"  download [addr] [sz]  请求下载 (如 download 40000 100)\n"
-"  xfer [seq]            传输数据块 (默认seq=1)\n"
-"  xexit                 传输终止\n"
-"  tp                    TesterPresent 保活\n"
-"  reset [hard|soft|keyoff]  ECU复位\n"
-"  dtcset [on|off]       暂停/恢复DTC记录\n"
-"  help                  显示此帮助\n"
-"  quit                  退出\n"
-"  ─────────────────────────────────────────────────────────────\n"
+"  -------------------------------------------------------------\n"
+"  session <01|02|03>   switch diagnostic session (01=default 02=programming 03=extended)\n"
+"  security             request a security seed (then sendkey <4 hex bytes>)\n"
+"  sendkey <hex4>       send the security key (4 hex bytes)\n"
+"  read <did>           read a DID (e.g. read f190)\n"
+"  write <did> <hex>    write a DID (e.g. write ff01 aabb)\n"
+"  dtc [mask]           read DTCs (optional status mask, default 0x08)\n"
+"  clear                clear all DTCs\n"
+"  routine <rid>        start a routine (e.g. routine 0201)\n"
+"  download [addr] [sz] request download (e.g. download 40000 100)\n"
+"  xfer [seq]           transfer a data block (default seq=1)\n"
+"  xexit                end the transfer\n"
+"  tp                   tester present keep-alive\n"
+"  reset [hard|soft|keyoff]  ECU reset\n"
+"  dtcset [on|off]      pause/resume DTC recording\n"
+"  help                 show this help\n"
+"  quit                 exit\n"
+"  -------------------------------------------------------------\n"
     );
 }
 
-/* ── 主循环 ──────────────────────────────── */
+/* -- Main loop ----------------------------------------- */
 int main(int argc, char **argv)
 {
     const char *ip = (argc > 1) ? argv[1] : "127.0.0.1";
@@ -285,7 +286,7 @@ int main(int argc, char **argv)
         fflush(stdout);
         if (!fgets(line, sizeof(line), stdin)) break;
 
-        /* 移除末尾换行 */
+        /* Strip trailing newline */
         size_t len = strlen(line);
         while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
 

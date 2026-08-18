@@ -1,5 +1,5 @@
-/* uds_client.c — uds-lite 诊断仪端自动化工作流
- * 连接ECU服务器，执行完整的诊断流程。
+/* uds_client.c -- uds-lite tester-side automated workflow
+ * Connects to the ECU server and runs the complete diagnostic sequence.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,7 +15,7 @@
 static int sock_fd = -1;
 static u8 recv_buf[UDS_MAX_MSG_LEN];
 
-/* ── 网络层 ──────────────────────────────── */
+/* -- Network layer ------------------------------------- */
 static int connect_to_ecu(const char *ip, int port)
 {
     sock_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -47,7 +47,7 @@ static ssize_t recv_response(u8 *buf, u16 max_len)
     return recv(sock_fd, buf, max_len, 0);
 }
 
-/* ── 响应解析与显示 ──────────────────────── */
+/* -- Response parsing and display ---------------------- */
 static const char *nrc_name(u8 nrc)
 {
     switch (nrc) {
@@ -91,7 +91,7 @@ static u8 check_positive(const u8 *raw, u16 len, u8 expected_sid)
     return FALSE;
 }
 
-/* ── 诊断工作流 ──────────────────────────── */
+/* -- Diagnostic workflow ------------------------------- */
 
 static void do_session_control(u8 session)
 {
@@ -128,12 +128,12 @@ static void do_security_access(void)
     if (n1 <= 0 || check_negative_response(recv_buf, n1)) return;
     dump_hex("Seed Response", recv_buf, n1);
 
-    /* extract seed: 响应格式 = 正响应SID + 子功能0x01 + 4字节seed */
+    /* extract seed: response format = positive SID + sub-function 0x01 + 4-byte seed */
     u8 seed[4] = {0};
     if (n1 >= 6) memcpy(seed, &recv_buf[2], 4);
     printf("  Seed: %02X %02X %02X %02X\n", seed[0], seed[1], seed[2], seed[3]);
 
-    /* TEACHING: 生产代码中密钥算法可能很复杂。这里用XOR 0x5A */
+    /* TEACHING: the key algorithm in production code can be complex. XOR 0x5A here. */
     u8 key[4];
     for (int i = 0; i < 4; i++) key[i] = seed[i] ^ 0x5A;
     printf("  Computed Key: %02X %02X %02X %02X\n", key[0], key[1], key[2], key[3]);
@@ -165,7 +165,7 @@ static void do_read_dtc(void)
 {
 
 
-    /* 子功能0x01: 报告数量 */
+    /* sub-function 0x01: report number of DTCs */
     u8 req_count[] = {SID_READ_DTC_INFORMATION,
                       SUB_REPORT_NUMBER_OF_DTC_BY_STATUS_MASK,
                       DTC_STATUS_CONFIRMED_DTC | DTC_STATUS_TEST_FAILED};
@@ -178,7 +178,7 @@ static void do_read_dtc(void)
         printf("  => %u confirmed+testFailed DTC(s)\n", count);
     }
 
-    /* 子功能0x02: 报告列表 */
+    /* sub-function 0x02: report DTC list */
     u8 req_list[] = {SID_READ_DTC_INFORMATION,
                      SUB_REPORT_DTC_BY_STATUS_MASK,
                      DTC_STATUS_CONFIRMED_DTC | DTC_STATUS_TEST_FAILED};
@@ -203,10 +203,10 @@ static void do_download(void)
 {
 
 
-    /* 0x34 请求下载: 地址0x00040000, 长度256字节 */
+    /* 0x34 request download: address 0x00040000, size 256 bytes */
     u8 download_req[] = {
         SID_REQUEST_DOWNLOAD,
-        0x00,  /* dataFormatIdentifier = 0x00 (无压缩/加密) */
+        0x00,  /* dataFormatIdentifier = 0x00 (no compression/encryption) */
         0x44,  /* addrWidth=4, sizeWidth=4 */
         0x00, 0x04, 0x00, 0x00,  /* memoryAddress = 0x00040000 */
         0x00, 0x00, 0x01, 0x00   /* memorySize = 256 */
@@ -217,14 +217,14 @@ static void do_download(void)
     dump_hex("RequestDownload Response", recv_buf, n1);
 
     u16 max_blk = (n1 >= 5) ? uds_read_u16_be(&recv_buf[3]) : 200;
-    if (max_blk > 200) max_blk = 200;  /* 防止缓冲区溢出，教学代码限定200字节 */
+    if (max_blk > 200) max_blk = 200;  /* prevent buffer overflow; teaching code capped at 200 bytes */
     printf("  MaxBlockSize = %u bytes\n", max_blk);
 
-    /* 0x36 传输数据块 */
+    /* 0x36 transfer data block */
     u8 blk_data[210];
     blk_data[0] = SID_TRANSFER_DATA;
     blk_data[1] = 1;  /* blockSequenceCounter = 1 */
-    memset(&blk_data[2], 0xCC, max_blk); /* 填充假固件数据 */
+    memset(&blk_data[2], 0xCC, max_blk); /* fill with dummy firmware data */
 
     printf("  Sending block 1 (%u bytes)...\n", max_blk);
     send_request(blk_data, 2 + max_blk);
@@ -232,7 +232,7 @@ static void do_download(void)
     if (n2 <= 0 || check_negative_response(recv_buf, n2)) return;
     dump_hex("TransferData Response", recv_buf, n2);
 
-    /* 0x37 传输终止 */
+    /* 0x37 transfer exit */
     u8 exit_req[] = {SID_REQUEST_TRANSFER_EXIT};
     send_request(exit_req, 1);
     ssize_t n3 = recv_response(recv_buf, sizeof(recv_buf));
@@ -251,7 +251,7 @@ static void do_clear_dtc(void)
     dump_hex("Rx", recv_buf, n);
 }
 
-/* ── 主入口 ──────────────────────────────── */
+/* -- Main entry ---------------------------------------- */
 int main(int argc, char **argv)
 {
     const char *ip = (argc > 1) ? argv[1] : "127.0.0.1";
@@ -261,7 +261,7 @@ int main(int argc, char **argv)
 
     if (connect_to_ecu(ip, port) < 0) return 1;
 
-    /* ── 完整的诊断工作流 ─────────────────── */
+    /* -- Complete diagnostic workflow ------------------- */
     printf("\n=== Step 1: DiagnosticSessionControl (enter session 0x03) ===\n");
     do_session_control(SESSION_EXTENDED);
     printf("\n=== Step 2: TesterPresent (keep-alive) ===\n");
@@ -269,32 +269,32 @@ int main(int argc, char **argv)
     printf("\n=== Step 3: SecurityAccess (seed/key to unlock level 1) ===\n");
     do_security_access();
 
-    /* 读几个DID */
+    /* Read a few DIDs */
     do_read_did(0x010C, "Engine RPM");
     do_read_did(0x0105, "Coolant Temp");
     do_read_did(0xF190, "VIN");
     do_read_did(0xF180, "SW Version");
 
-    /* 读DTC */
+    /* Read DTCs */
     printf("\n=== Step 4: ReadDTC (report by status mask) ===\n");
     do_read_dtc();
 
-    /* 例行控制 */
+    /* Routine control */
     printf("\n=== Step 5: RoutineControl (start routine 0x0201) ===\n");
     do_routine_control(0x0201);
 
-    /* 下载 (需要编程会话, 先切换) */
+    /* Download (requires programming session, switch first) */
     printf("\n=== Step 6: Programming session + Download ===\n");
     do_session_control(SESSION_PROGRAMMING);
     do_download();
 
-    /* 切回扩展，清除DTC */
+    /* Switch back to extended session and clear DTCs */
     printf("\n=== Step 7: Clear DTC ===\n");
     do_session_control(SESSION_EXTENDED);
     do_security_access();
     do_clear_dtc();
 
-    /* 复位并退出 */
+    /* Reset and exit */
     printf("\n=== Step 8: ECU Reset (soft) ===\n");
     {
         u8 req[] = {SID_ECU_RESET, SUB_SOFT_RESET};

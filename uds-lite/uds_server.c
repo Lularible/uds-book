@@ -1,17 +1,19 @@
-/* uds_server.c — uds-lite ECU端诊断服务器
- * 模拟一个ECU，监听TCP 13400端口，处理UDS请求。
+/* uds_server.c -- uds-lite ECU-side diagnostic server
+ * Simulates an ECU, listens on TCP port 13400 and handles UDS requests.
  *
- * 支持的服务:
- *   0x10 诊断会话控制   0x3E TesterPresent
- *   0x11 ECU复位          0x27 SecurityAccess
- *   0x22 按DID读         0x2E 按DID写
- *   0x19 读DTC          0x14 清除DTC
- *   0x31 RoutineControl   0x34/36/37 下载
- *   0x85 ControlDTCSetting
+ * Supported services:
+ *   0x10 diagnostic session control   0x3E tester present
+ *   0x11 ECU reset                    0x27 security access
+ *   0x22 read data by identifier      0x2E write data by identifier
+ *   0x19 read DTC information         0x14 clear diagnostic information
+ *   0x31 routine control              0x34/36/37 download
+ *   0x85 control DTC setting
  *
- * TEACHING: 此实现约500行，生产级AUTOSAR DCM约15000+行。
- * 简化: 无缓冲区管理（单个连接同步处理），无状态机断点重入，
- * S3超时未实现（生产代码用select或硬件定时器），Seed/Key用硬编码XOR算法。
+ * TEACHING: This implementation is ~500 lines; a production-grade
+ * AUTOSAR DCM is 15,000+ lines.
+ * Simplifications: no buffer management (single connection processed
+ * synchronously), no state machine resumability, no S3 timeout (production
+ * uses select() or a hardware timer), and a hardcoded XOR seed/key algorithm.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +27,7 @@
 #include "uds_common.h"
 #include "uds_msg.h"
 
-/* ── 全局ECU状态 ─────────────────────────── */
+/* -- Global ECU state ---------------------------------- */
 static u8  g_session      = SESSION_DEFAULT;
 static u8  g_security     = SECURITY_LOCKED;
 static u8  g_dtc_setting  = SUB_DTC_ON;
@@ -35,55 +37,55 @@ static u8  g_dtc_count    = 0;
 static TransferState g_xfer = {FALSE, 0, 0, 0, 0, 0};
 static RoutineState g_routine = {0, FALSE, 0, 0};
 
-/* ── DID 表 (教学简化: 静态定义) ──────────── */
+/* -- DID table (teaching simplification: statically defined) -- */
 #define DID_COUNT 8
 static DidRecord g_did_table[DID_COUNT];
 
 static void init_did_table(void)
 {
-    /* DID 0x010C: 发动机转速 0.25 rpm/bit, 2字节 */
+    /* DID 0x010C: engine speed, 0.25 rpm/bit, 2 bytes */
     DidRecord *d = &g_did_table[0];
     d->did = 0x010C; d->writable = FALSE;
     d->session_required = SESSION_DEFAULT; d->security_required = SECURITY_LOCKED;
-    d->data[0] = 0x0B; d->data[1] = 0xB8; d->data_len = 2; /* 3000/4=750*4≈3000rpm uh --> 0x0BB8 = 3000 */
+    d->data[0] = 0x0B; d->data[1] = 0xB8; d->data_len = 2; /* 3000/4=750*4=3000rpm --> 0x0BB8 = 3000 */
 
-    /* DID 0x0105: 冷却液温度 -40°C offset, 1°C/bit, 1字节 */
+    /* DID 0x0105: coolant temperature, -40C offset, 1C/bit, 1 byte */
     d = &g_did_table[1];
     d->did = 0x0105; d->writable = FALSE;
     d->session_required = SESSION_DEFAULT; d->security_required = SECURITY_LOCKED;
-    d->data[0] = 0x84; /* 92°C → 92+40=132=0x84 */ d->data_len = 1;
+    d->data[0] = 0x84; /* 92C -> 92+40=132=0x84 */ d->data_len = 1;
 
-    /* DID 0xF190: VIN 码 "W0L00000123456789" 17字节 */
+    /* DID 0xF190: VIN "W0L00000123456789", 17 bytes */
     d = &g_did_table[2];
     d->did = 0xF190; d->writable = TRUE;
     d->session_required = SESSION_EXTENDED; d->security_required = SECURITY_LEVEL_1;
     memcpy(d->data, "W0L00000123456789", 17); d->data_len = 17;
 
-    /* DID 0x010D: 车速 1 km/h/bit */
+    /* DID 0x010D: vehicle speed, 1 km/h/bit */
     d = &g_did_table[3];
     d->did = 0x010D; d->writable = FALSE;
     d->session_required = SESSION_DEFAULT; d->security_required = SECURITY_LOCKED;
     d->data[0] = 87; d->data_len = 1;
 
-    /* DID 0x0110: MAF 空气流率 0.01 g/s/bit */
+    /* DID 0x0110: MAF air flow rate, 0.01 g/s/bit */
     d = &g_did_table[4];
     d->did = 0x0110; d->writable = FALSE;
     d->session_required = SESSION_DEFAULT; d->security_required = SECURITY_LOCKED;
-    d->data[0] = 0x00; d->data[1] = 0xAA; d->data_len = 2; /* 170*0.01=1.70g/s → 0x00AA */
+    d->data[0] = 0x00; d->data[1] = 0xAA; d->data_len = 2; /* 170*0.01=1.70g/s -> 0x00AA */
 
-    /* DID 0xF180: ECU 软件版本号 "SW-V1.0.0" */
+    /* DID 0xF180: ECU software version "SW-V1.0.0" */
     d = &g_did_table[5];
     d->did = 0xF180; d->writable = FALSE;
     d->session_required = SESSION_DEFAULT; d->security_required = SECURITY_LOCKED;
     memcpy(d->data, "SW-V1.0.0", 9); d->data_len = 9;
 
-    /* DID 0xFF01: 诊断标定ID (教学专用, 可写) */
+    /* DID 0xFF01: diagnostic calibration ID (teaching-only, writable) */
     d = &g_did_table[6];
     d->did = 0xFF01; d->writable = TRUE;
     d->session_required = SESSION_EXTENDED; d->security_required = SECURITY_LEVEL_1;
     d->data[0] = 0x00; d->data[1] = 0x00; d->data_len = 2;
 
-    /* DID 0x0150: 短期燃油修正, 1字节, -100% ~ +99.2% */
+    /* DID 0x0150: short-term fuel trim, 1 byte, -100% to +99.2% */
     d = &g_did_table[7];
     d->did = 0x0150; d->writable = FALSE;
     d->session_required = SESSION_DEFAULT; d->security_required = SECURITY_LOCKED;
@@ -98,19 +100,19 @@ static DidRecord *find_did(u16 did)
     return NULL;
 }
 
-/* ── DTC 存储 (教学简化: 固定2个DTC) ──────── */
+/* -- DTC storage (teaching simplification: two fixed DTCs) -- */
 static DtcRecord g_dtc_table[UDS_MAX_DTC_COUNT];
 
 static void init_dtc_table(void)
 {
-    /* DTC1: P0102 MAF传感器电路低电压 — confirmed + testFailed */
+    /* DTC1: P0102 MAF sensor circuit low voltage - confirmed + testFailed */
     g_dtc_table[0].code[0] = 0x00; g_dtc_table[0].code[1] = 0x01; g_dtc_table[0].code[2] = 0x02;
     g_dtc_table[0].status = DTC_STATUS_TEST_FAILED | DTC_STATUS_CONFIRMED_DTC;
     g_dtc_table[0].snapshot_count = 2;
     g_dtc_table[0].snapshot_dids[0] = 0x010C; /* RPM */
     g_dtc_table[0].snapshot_dids[1] = 0x010D; /* Speed */
 
-    /* DTC2: C0421 ABS泵电机故障 — pending + testFailed */
+    /* DTC2: C0421 ABS pump motor fault - pending + testFailed */
     g_dtc_table[1].code[0] = 0x40; g_dtc_table[1].code[1] = 0x02; g_dtc_table[1].code[2] = 0x01;
     g_dtc_table[1].status = DTC_STATUS_TEST_FAILED | DTC_STATUS_PENDING_DTC;
     g_dtc_table[1].snapshot_count = 1;
@@ -119,23 +121,23 @@ static void init_dtc_table(void)
     g_dtc_count = 2;
 }
 
-/* ── SecurityAccess: 教学级 Seed/Key 算法 ─── */
+/* -- SecurityAccess: teaching-grade seed/key algorithm -- */
 static void compute_seed(u8 seed[4])
 {
-    /* TEACHING: 生产代码用硬件TRNG。这里用固定值模拟 */
+    /* TEACHING: production code uses a hardware TRNG. Fixed value here. */
     seed[0] = 0xA3; seed[1] = 0xD4; seed[2] = 0x5F; seed[3] = 0x12;
 }
 
 static u8 verify_key(const u8 *key, u8 key_len)
 {
-    /* TEACHING: 生产代码用AES/HMAC。这里用XOR固定密钥 = 0x5A */
+    /* TEACHING: production code uses AES/HMAC. XOR with fixed key = 0x5A here. */
     if (key_len < 4) return FALSE;
     u8 expected[4];
     for (int i = 0; i < 4; i++) expected[i] = g_seed[i] ^ 0x5A;
     return (memcmp(key, expected, 4) == 0);
 }
 
-/* ── SID 分发 ────────────────────────────── */
+/* -- SID dispatch -------------------------------------- */
 
 static void handle_session_control(const u8 *req, u16 req_len, u8 *resp, u16 *resp_len)
 {
@@ -175,7 +177,7 @@ static void handle_ecu_reset(const u8 *req, u16 req_len, u8 *resp, u16 *resp_len
     if (sub < SUB_HARD_RESET || sub > SUB_SOFT_RESET) {
         *resp_len = uds_build_negative_response(resp, SID_ECU_RESET, NRC_SUBFUNCTION_NOT_SUPPORTED); return;
     }
-    /* 正响应在复位之前发送 */
+    /* Positive response is sent before performing the reset */
     u8 extra[] = {sub};
     *resp_len = uds_build_positive_response(resp, SID_ECU_RESET, extra, 1);
 }
@@ -186,14 +188,14 @@ static void handle_security_access(const u8 *req, u16 req_len, u8 *resp, u16 *re
     u8 sub = req[1] & 0x7F;
 
     if (sub == SUB_REQUEST_SEED) {
-        /* 奇数 → 请求种子 */
+        /* Odd sub-function -> request seed */
         compute_seed(g_seed);
         g_seed_pending = TRUE;
         u8 extra[5] = {SUB_REQUEST_SEED};
         memcpy(&extra[1], g_seed, 4);
         *resp_len = uds_build_positive_response(resp, SID_SECURITY_ACCESS, extra, 5);
     } else if (sub == SUB_SEND_KEY && g_seed_pending) {
-        /* 偶数 → 发送密钥 */
+        /* Even sub-function -> send key */
         u8 key[4];
         if (req_len < 6) { *resp_len = uds_build_negative_response(resp, SID_SECURITY_ACCESS, NRC_INCORRECT_MESSAGE_LENGTH); return; }
         memcpy(key, &req[2], 4);
@@ -232,6 +234,9 @@ static void handle_read_did(const u8 *req, u16 req_len, u8 *resp, u16 *resp_len)
         }
         if (g_security < d->security_required) {
             *resp_len = uds_build_negative_response(resp, SID_READ_DATA_BY_IDENTIFIER, NRC_SECURITY_ACCESS_DENIED); return;
+        }
+        if (pos + 2 + d->data_len > UDS_MAX_MSG_LEN) {
+            *resp_len = uds_build_negative_response(resp, SID_READ_DATA_BY_IDENTIFIER, NRC_RESPONSE_TOO_LONG); return;
         }
         out[pos++] = (did >> 8) & 0xFF;
         out[pos++] = did & 0xFF;
@@ -295,7 +300,7 @@ static void handle_clear_dtc(const u8 *req, u16 req_len, u8 *resp, u16 *resp_len
 {
     (void)req;
     if (req_len < 4) { *resp_len = uds_build_negative_response(resp, SID_CLEAR_DIAGNOSTIC_INFORMATION, NRC_INCORRECT_MESSAGE_LENGTH); return; }
-    /* groupOfDTC = 0xFFFFFF → 全部清除 */
+    /* groupOfDTC = 0xFFFFFF clears everything */
     g_dtc_count = 0;
     resp[0] = SID_CLEAR_DIAGNOSTIC_INFORMATION | SID_POSITIVE_RESPONSE_MASK;
     *resp_len = 1;
@@ -312,7 +317,7 @@ static void handle_routine_control(const u8 *req, u16 req_len, u8 *resp, u16 *re
     if (sub == SUB_START_ROUTINE) {
         g_routine.rid = rid;
         g_routine.activated = TRUE;
-        g_routine.current_status = 0x01; /* 已完成 */
+        g_routine.current_status = 0x01; /* completed */
         g_routine.progress = 100;
         u8 extra[4] = {SUB_START_ROUTINE, (rid >> 8) & 0xFF, rid & 0xFF, 0x01};
         *resp_len = uds_build_positive_response(resp, SID_ROUTINE_CONTROL, extra, 4);
@@ -336,6 +341,10 @@ static void handle_request_download(const u8 *req, u16 req_len, u8 *resp, u16 *r
     u8 addr_len_fmt = req[1];
     u8 addr_w = addr_len_fmt & 0x0F;
     u8 size_w = (addr_len_fmt >> 4) & 0x0F;
+
+    if (req_len < 2 + addr_w + size_w) {
+        *resp_len = uds_build_negative_response(resp, SID_REQUEST_DOWNLOAD, NRC_INCORRECT_MESSAGE_LENGTH); return;
+    }
 
     u32 addr = 0, size = 0;
     for (u8 i = 0; i < addr_w; i++) addr = (addr << 8) | req[2 + i];
@@ -395,7 +404,7 @@ static void handle_control_dtc_setting(const u8 *req, u16 req_len, u8 *resp, u16
     *resp_len = uds_build_positive_response(resp, SID_CONTROL_DTC_SETTING, extra, 1);
 }
 
-/* ── 顶层分发入口 ────────────────────────── */
+/* -- Top-level dispatch entry --------------------------- */
 static u16 dispatch(const u8 *req, u16 req_len, u8 *resp)
 {
     if (req_len < 1) return 0;
@@ -423,7 +432,7 @@ static u16 dispatch(const u8 *req, u16 req_len, u8 *resp)
     return resp_len;
 }
 
-/* ── 主函数 ──────────────────────────────── */
+/* -- Main function -------------------------------------- */
 int main(int argc, char **argv)
 {
     int port = (argc > 1) ? atoi(argv[1]) : UDS_SERVER_PORT;
